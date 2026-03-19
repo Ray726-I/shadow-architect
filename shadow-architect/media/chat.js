@@ -7,6 +7,30 @@ const model = document.getElementById('model');
 const modeButtons = document.querySelectorAll('.mode-btn');
 let currentMode = 'chat';
 
+function renderAssistantHtml(content) {
+  if (!window.marked || !window.DOMPurify) {
+    return content;
+  }
+
+  const html = window.marked.parse(content, {
+    gfm: true,
+    breaks: true
+  });
+
+  return window.DOMPurify.sanitize(html);
+}
+
+function highlightCodeBlocks(container) {
+  if (!window.hljs) {
+    return;
+  }
+
+  const blocks = container.querySelectorAll('pre code');
+  for (const block of blocks) {
+    window.hljs.highlightElement(block);
+  }
+}
+
 function setModelOptions(models, selectedModel) {
   model.innerHTML = '';
   for (const item of models) {
@@ -24,7 +48,14 @@ function setModelOptions(models, selectedModel) {
 function addMessage(role, content) {
   const div = document.createElement('div');
   div.className = 'message ' + role;
-  div.textContent = content;
+
+  if (role === 'assistant') {
+    div.innerHTML = renderAssistantHtml(content);
+    highlightCodeBlocks(div);
+  } else {
+    div.textContent = content;
+  }
+
   messages.appendChild(div);
   messages.scrollTop = messages.scrollHeight;
 }

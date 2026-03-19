@@ -25,6 +25,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.html = this._getHtml(webviewView.webview);
 
+    const configSubscription = vscode.workspace.onDidChangeConfiguration(event => {
+      if (event.affectsConfiguration('shadow-architect.provider') || event.affectsConfiguration('shadow-architect.model')) {
+        this.sendModelList(webviewView);
+      }
+    });
+    webviewView.onDidDispose(() => {
+      configSubscription.dispose();
+    });
+
     webviewView.webview.onDidReceiveMessage(message => {
       if (message.type === 'chat') {
         const mode = this.normalizeMode(String(message.mode ?? 'chat'));
@@ -44,12 +53,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       if (message.type === 'setModel') {
         this.handleSetModel(webviewView, String(message.model ?? ''));
-      }
-    });
-
-    vscode.workspace.onDidChangeConfiguration(event => {
-      if (event.affectsConfiguration('shadow-architect.provider') || event.affectsConfiguration('shadow-architect.model')) {
-        this.sendModelList(webviewView);
       }
     });
   }
@@ -147,6 +150,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const jsUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this._extensionUri, 'media', 'chat.js')
     );
+    const markedUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'media', 'vendor', 'marked.min.js')
+    );
+    const highlightUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'media', 'vendor', 'highlight.min.js')
+    );
+    const domPurifyUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'media', 'vendor', 'dompurify.min.js')
+    );
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -174,6 +186,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <textarea id="input" rows="2" placeholder="Ask anything..."></textarea>
     <button id="send">Send</button>
   </div>
+  <script src="${markedUri}"></script>
+  <script src="${highlightUri}"></script>
+  <script src="${domPurifyUri}"></script>
   <script src="${jsUri}"></script>
 </body>
 </html>`;

@@ -91,6 +91,86 @@ body {
   align-self: flex-start;
 }
 
+.message.assistant p {
+  margin: 0 0 8px;
+}
+
+.message.assistant p:last-child {
+  margin-bottom: 0;
+}
+
+.message.assistant ul,
+.message.assistant ol {
+  margin: 0 0 8px 18px;
+}
+
+.message.assistant pre {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--vscode-editorWidget-border);
+  background: var(--vscode-editor-background);
+  overflow-x: auto;
+}
+
+.message.assistant code {
+  font-size: 12px;
+}
+
+.message.assistant pre code {
+  display: block;
+  padding: 0;
+  background: transparent;
+  color: var(--vscode-editor-foreground);
+  font-family: var(--vscode-editor-font-family);
+}
+
+.message.assistant :not(pre) > code {
+  background: var(--vscode-textCodeBlock-background);
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--vscode-textPreformat-foreground);
+}
+
+.message.assistant .hljs {
+  background: transparent;
+  color: var(--vscode-editor-foreground);
+}
+
+.message.assistant .hljs-keyword,
+.message.assistant .hljs-selector-tag,
+.message.assistant .hljs-literal,
+.message.assistant .hljs-title,
+.message.assistant .hljs-section,
+.message.assistant .hljs-doctag,
+.message.assistant .hljs-name,
+.message.assistant .hljs-strong {
+  color: var(--vscode-symbolIcon-keywordForeground);
+}
+
+.message.assistant .hljs-string,
+.message.assistant .hljs-attr,
+.message.assistant .hljs-template-tag,
+.message.assistant .hljs-template-variable,
+.message.assistant .hljs-bullet,
+.message.assistant .hljs-addition {
+  color: var(--vscode-symbolIcon-stringForeground);
+}
+
+.message.assistant .hljs-number,
+.message.assistant .hljs-symbol,
+.message.assistant .hljs-variable,
+.message.assistant .hljs-quote,
+.message.assistant .hljs-link {
+  color: var(--vscode-symbolIcon-numberForeground);
+}
+
+.message.assistant .hljs-comment,
+.message.assistant .hljs-meta,
+.message.assistant .hljs-deletion {
+  color: var(--vscode-editorLineNumber-foreground);
+}
+
 #input-row {
   display: flex;
   gap: 6px;
