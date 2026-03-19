@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { createProvider } from '../provider';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'shadow-architect.chatView';
@@ -15,13 +16,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.onDidReceiveMessage(message => {
       if (message.type === 'chat') {
-        webviewView.webview.postMessage({
-          type: 'addMessage',
-          role: 'assistant',
-          content: `You said: ${message.text}`
-        });
+        this.handleChatMessage(webviewView, String(message.text ?? ''));
       }
     });
+  }
+
+  private async handleChatMessage(webviewView: vscode.WebviewView, userText: string) {
+    const text = userText.trim();
+    if (!text) {
+      return;
+    }
+
+    try {
+      const provider = createProvider();
+      const reply = await provider.chat([
+        { role: 'user', content: text }
+      ]);
+
+      webviewView.webview.postMessage({
+        type: 'addMessage',
+        role: 'assistant',
+        content: reply
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Request failed';
+      webviewView.webview.postMessage({
+        type: 'addMessage',
+        role: 'assistant',
+        content: `Error: ${message}`
+      });
+    }
   }
 
   private _getHtml(webview: vscode.Webview): string {

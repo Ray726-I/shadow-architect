@@ -18,6 +18,35 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "Shadow Architect",
+      "properties": {
+        "shadow-architect.provider": {
+          "type": "string",
+          "enum": [
+            "ollama",
+            "openai"
+          ],
+          "default": "ollama",
+          "description": "LLM provider for chat responses."
+        },
+        "shadow-architect.model": {
+          "type": "string",
+          "default": "qwen3-coder:480b-cloud",
+          "description": "Model name sent to the configured provider."
+        },
+        "shadow-architect.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Optional custom chat completions endpoint URL."
+        },
+        "shadow-architect.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for providers that require authentication, such as OpenAI."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
