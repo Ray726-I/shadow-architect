@@ -10,6 +10,18 @@ export function activate(context: vscode.ExtensionContext) {
       provider
     )
   );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('shadow-architect.openChat', async () => {
+      await vscode.commands.executeCommand('shadow-architect.chatView.focus');
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('shadow-architect.helloWorld', async () => {
+      await vscode.commands.executeCommand('shadow-architect.chatView.focus');
+    })
+  );
 }
 
 export function deactivate() {}
