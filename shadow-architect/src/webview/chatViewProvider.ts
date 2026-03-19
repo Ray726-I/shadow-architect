@@ -1,5 +1,11 @@
 import * as vscode from 'vscode';
-import { createProvider } from '../provider';
+import {
+  createProvider,
+  defaultModelForProvider,
+  getProviderConfig,
+  listModels,
+  type ProviderName
+} from '../provider';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'shadow-architect.chatView';
@@ -17,7 +23,77 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage(message => {
       if (message.type === 'chat') {
         this.handleChatMessage(webviewView, String(message.text ?? ''));
+        return;
       }
+
+      if (message.type === 'getProviderConfig') {
+        this.sendModelList(webviewView);
+        return;
+      }
+
+      if (message.type === 'setProvider') {
+        this.handleSetProvider(webviewView, String(message.provider ?? ''));
+        return;
+      }
+
+      if (message.type === 'setModel') {
+        this.handleSetModel(webviewView, String(message.model ?? ''));
+      }
+    });
+
+    vscode.workspace.onDidChangeConfiguration(event => {
+      if (event.affectsConfiguration('shadow-architect.provider') || event.affectsConfiguration('shadow-architect.model')) {
+        this.sendModelList(webviewView);
+      }
+    });
+  }
+
+  private async handleSetProvider(webviewView: vscode.WebviewView, provider: string) {
+    const normalized: ProviderName = provider === 'openai' ? 'openai' : 'ollama';
+    const nextModel = defaultModelForProvider(normalized);
+
+    await vscode.workspace
+      .getConfiguration('shadow-architect')
+      .update('provider', normalized, vscode.ConfigurationTarget.Global);
+
+    await vscode.workspace
+      .getConfiguration('shadow-architect')
+      .update('model', nextModel, vscode.ConfigurationTarget.Global);
+
+    await this.sendModelList(webviewView);
+  }
+
+  private async handleSetModel(webviewView: vscode.WebviewView, model: string) {
+    const trimmed = model.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    await vscode.workspace
+      .getConfiguration('shadow-architect')
+      .update('model', trimmed, vscode.ConfigurationTarget.Global);
+
+    await this.sendModelList(webviewView);
+  }
+
+  private async sendModelList(webviewView: vscode.WebviewView) {
+    const config = getProviderConfig();
+    const models = await listModels(config.provider).catch(() => [] as string[]);
+    const selectedModel = models.includes(config.model)
+      ? config.model
+      : models[0] ?? config.model;
+
+    if (selectedModel !== config.model) {
+      await vscode.workspace
+        .getConfiguration('shadow-architect')
+        .update('model', selectedModel, vscode.ConfigurationTarget.Global);
+    }
+
+    webviewView.webview.postMessage({
+      type: 'providerInfo',
+      provider: config.provider,
+      model: selectedModel,
+      models
     });
   }
 
@@ -64,6 +140,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <link rel="stylesheet" href="${cssUri}">
 </head>
 <body>
+  <div id="toolbar">
+    <label for="provider">AI</label>
+    <select id="provider">
+      <option value="ollama">Ollama</option>
+      <option value="openai">OpenAI</option>
+    </select>
+    <select id="model"></select>
+  </div>
   <div id="messages"></div>
   <div id="input-row">
     <textarea id="input" rows="2" placeholder="Ask anything..."></textarea>
