@@ -1,6 +1,6 @@
 {
   "name": "shadow-architect",
-  "displayName": "shadow-architect",
+  "displayName": "Shadow Architect",
   "description": "Shadow Architect is an AI coding agent available as a VS code extension.",
   "version": "0.0.1",
   "engines": {
@@ -9,9 +9,30 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "publisher": "shadow-architect",
+  "activationEvents": [
+    "onView:shadow-architect.chatView"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "shadow-architect",
+          "title": "Shadow Architect",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "shadow-architect": [
+        {
+          "type": "webview",
+          "id": "shadow-architect.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "shadow-architect.helloWorld",
