@@ -1,1 +1,5 @@
-node_modules/\nout/\ndist/\n*.vsix\n.DS_Store
+node_modules/
+out/
+dist/
+*.vsix
+.DS_Store
