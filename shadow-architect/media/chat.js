@@ -4,6 +4,8 @@ const input = document.getElementById('input');
 const send = document.getElementById('send');
 const provider = document.getElementById('provider');
 const model = document.getElementById('model');
+const modeButtons = document.querySelectorAll('.mode-btn');
+let currentMode = 'chat';
 
 function setModelOptions(models, selectedModel) {
   model.innerHTML = '';
@@ -31,9 +33,18 @@ send.onclick = () => {
   const text = input.value.trim();
   if (!text) return;
   addMessage('user', text);
-  vscode.postMessage({ type: 'chat', text });
+  vscode.postMessage({ type: 'chat', text, mode: currentMode });
   input.value = '';
 };
+
+for (const button of modeButtons) {
+  button.addEventListener('click', () => {
+    currentMode = button.dataset.mode || 'chat';
+    for (const item of modeButtons) {
+      item.classList.toggle('active', item === button);
+    }
+  });
+}
 
 provider.addEventListener('change', () => {
   vscode.postMessage({ type: 'setProvider', provider: provider.value });

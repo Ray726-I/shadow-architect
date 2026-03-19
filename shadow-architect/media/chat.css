@@ -39,6 +39,29 @@ body {
   padding: 4px 8px;
 }
 
+#mode-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.mode-btn {
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--vscode-input-border);
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.mode-btn.active {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-button-background);
+}
+
 #messages {
   flex: 1;
   overflow-y: auto;

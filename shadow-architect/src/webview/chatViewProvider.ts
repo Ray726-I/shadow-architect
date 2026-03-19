@@ -1,16 +1,21 @@
 import * as vscode from 'vscode';
 import {
-  createProvider,
   defaultModelForProvider,
   getProviderConfig,
   listModels,
   type ProviderName
 } from '../provider';
+import { Agent, type AgentMode } from '../agent/agent';
+import { ToolExecutor } from '../agent/tools';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'shadow-architect.chatView';
+  private readonly agent: Agent;
 
-  constructor(private readonly _extensionUri: vscode.Uri) {}
+  constructor(private readonly _extensionUri: vscode.Uri) {
+    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+    this.agent = new Agent(new ToolExecutor(workspacePath));
+  }
 
   resolveWebviewView(webviewView: vscode.WebviewView) {
     webviewView.webview.options = {
@@ -22,7 +27,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.onDidReceiveMessage(message => {
       if (message.type === 'chat') {
-        this.handleChatMessage(webviewView, String(message.text ?? ''));
+        const mode = this.normalizeMode(String(message.mode ?? 'chat'));
+        this.handleChatMessage(webviewView, String(message.text ?? ''), mode);
         return;
       }
 
@@ -46,6 +52,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.sendModelList(webviewView);
       }
     });
+  }
+
+  private normalizeMode(mode: string): AgentMode {
+    if (mode === 'fix') {
+      return 'fix';
+    }
+    if (mode === 'build') {
+      return 'build';
+    }
+    return 'chat';
   }
 
   private async handleSetProvider(webviewView: vscode.WebviewView, provider: string) {
@@ -97,17 +113,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private async handleChatMessage(webviewView: vscode.WebviewView, userText: string) {
+  private async handleChatMessage(webviewView: vscode.WebviewView, userText: string, mode: AgentMode) {
     const text = userText.trim();
     if (!text) {
       return;
     }
 
     try {
-      const provider = createProvider();
-      const reply = await provider.chat([
-        { role: 'user', content: text }
-      ]);
+      const reply = await this.agent.run({
+        mode,
+        userText: text
+      });
 
       webviewView.webview.postMessage({
         type: 'addMessage',
@@ -149,6 +165,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <select id="model"></select>
   </div>
   <div id="messages"></div>
+  <div id="mode-row">
+    <button class="mode-btn active" data-mode="chat">Chat</button>
+    <button class="mode-btn" data-mode="fix">Fix</button>
+    <button class="mode-btn" data-mode="build">Build</button>
+  </div>
   <div id="input-row">
     <textarea id="input" rows="2" placeholder="Ask anything..."></textarea>
     <button id="send">Send</button>
