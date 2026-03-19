@@ -1,8 +1,11 @@
 import * as vscode from 'vscode';
 import { ChatViewProvider } from './webview/chatViewProvider';
+import { ShadowWorkspace } from './workspace/workspace';
 
 export function activate(context: vscode.ExtensionContext) {
-  const provider = new ChatViewProvider(context.extensionUri);
+  const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+  const shadowWorkspace = new ShadowWorkspace(context.globalStorageUri.fsPath, workspacePath);
+  const provider = new ChatViewProvider(context.extensionUri, shadowWorkspace, workspacePath);
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(

@@ -60,6 +60,10 @@ function addMessage(role, content) {
   messages.scrollTop = messages.scrollHeight;
 }
 
+function clearMessages() {
+  messages.innerHTML = '';
+}
+
 send.onclick = () => {
   const text = input.value.trim();
   if (!text) return;
@@ -102,7 +106,25 @@ window.addEventListener('message', e => {
   if (msg.type === 'providerInfo') {
     provider.value = msg.provider === 'openai' ? 'openai' : 'ollama';
     setModelOptions(Array.isArray(msg.models) ? msg.models : [], msg.model);
+    return;
+  }
+
+  if (msg.type === 'sessionLoaded') {
+    clearMessages();
+    const sessionMessages = Array.isArray(msg.messages) ? msg.messages : [];
+    for (const item of sessionMessages) {
+      if (!item || typeof item !== 'object') {
+        continue;
+      }
+      const role = item.role === 'assistant' ? 'assistant' : 'user';
+      const text = typeof item.text === 'string' ? item.text : '';
+      if (!text) {
+        continue;
+      }
+      addMessage(role, text);
+    }
   }
 });
 
 vscode.postMessage({ type: 'getProviderConfig' });
+vscode.postMessage({ type: 'ready' });

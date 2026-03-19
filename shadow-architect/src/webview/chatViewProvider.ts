@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { randomUUID } from 'node:crypto';
 import {
   defaultModelForProvider,
   getProviderConfig,
@@ -7,13 +8,18 @@ import {
 } from '../provider';
 import { Agent, type AgentMode } from '../agent/agent';
 import { ToolExecutor } from '../agent/tools';
+import { ShadowWorkspace, type ChatSession, type SessionMessage } from '../workspace/workspace';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'shadow-architect.chatView';
   private readonly agent: Agent;
+  private currentSession: ChatSession | null = null;
 
-  constructor(private readonly _extensionUri: vscode.Uri) {
-    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+  constructor(
+    private readonly _extensionUri: vscode.Uri,
+    private readonly shadowWorkspace: ShadowWorkspace,
+    workspacePath: string
+  ) {
     this.agent = new Agent(new ToolExecutor(workspacePath));
   }
 
@@ -41,6 +47,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      if (message.type === 'ready') {
+        this.handleReady(webviewView);
+        return;
+      }
+
       if (message.type === 'getProviderConfig') {
         this.sendModelList(webviewView);
         return;
@@ -55,6 +66,80 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.handleSetModel(webviewView, String(message.model ?? ''));
       }
     });
+  }
+
+  private async handleReady(webviewView: vscode.WebviewView) {
+    await this.ensureCurrentSession();
+
+    if (!this.currentSession) {
+      return;
+    }
+
+    webviewView.webview.postMessage({
+      type: 'sessionLoaded',
+      sessionId: this.currentSession.id,
+      messages: this.currentSession.messages
+    });
+  }
+
+  private async ensureCurrentSession() {
+    if (this.currentSession) {
+      return;
+    }
+
+    const sessions = await this.shadowWorkspace.listChatSessions();
+    if (sessions.length > 0) {
+      const latest = await this.shadowWorkspace.getChatSession(sessions[0].id);
+      if (latest) {
+        this.currentSession = latest;
+        return;
+      }
+    }
+
+    this.currentSession = this.createEmptySession();
+    await this.shadowWorkspace.saveChatSession(this.currentSession);
+  }
+
+  private createEmptySession(): ChatSession {
+    const now = new Date().toISOString();
+    return {
+      id: randomUUID(),
+      name: 'New Chat',
+      createdAt: now,
+      updatedAt: now,
+      messages: []
+    };
+  }
+
+  private buildSessionName(text: string): string {
+    const compact = text.replace(/\s+/g, ' ').trim();
+    if (!compact) {
+      return 'New Chat';
+    }
+
+    return compact.slice(0, 40);
+  }
+
+  private async appendToSession(message: SessionMessage) {
+    try {
+      await this.ensureCurrentSession();
+      if (!this.currentSession) {
+        return;
+      }
+
+      const isFirstUserMessage = message.role === 'user'
+        && !this.currentSession.messages.some(item => item.role === 'user');
+
+      this.currentSession.messages.push(message);
+      if (isFirstUserMessage) {
+        this.currentSession.name = this.buildSessionName(message.text);
+      }
+
+      this.currentSession.updatedAt = new Date().toISOString();
+      await this.shadowWorkspace.saveChatSession(this.currentSession);
+    } catch (error) {
+      console.error('Failed to save chat session', error);
+    }
   }
 
   private normalizeMode(mode: string): AgentMode {
@@ -122,11 +207,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    await this.appendToSession({ role: 'user', text });
+
     try {
       const reply = await this.agent.run({
         mode,
         userText: text
       });
+
+      await this.appendToSession({ role: 'assistant', text: reply });
 
       webviewView.webview.postMessage({
         type: 'addMessage',
@@ -135,10 +224,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Request failed';
+      const content = `Error: ${message}`;
+      await this.appendToSession({ role: 'assistant', text: content });
+
       webviewView.webview.postMessage({
         type: 'addMessage',
         role: 'assistant',
-        content: `Error: ${message}`
+        content
       });
     }
   }

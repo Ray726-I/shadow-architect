@@ -4,6 +4,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 const exec = promisify(execCallback);
+const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist']);
 
 export type ToolName =
   | 'read_file'
@@ -11,6 +12,8 @@ export type ToolName =
   | 'list_files'
   | 'search_files'
   | 'run_command';
+
+export type ToolAccess = 'read_only' | 'full';
 
 export interface ToolCall {
   name: ToolName;
@@ -22,19 +25,36 @@ export interface ToolResult {
   output: string;
 }
 
+export interface ExecuteOptions {
+  access?: ToolAccess;
+}
+
 export class ToolExecutor {
   constructor(private readonly workspaceRoot: string) {}
 
-  listToolNames(): ToolName[] {
+  getWorkspaceRoot(): string {
+    return this.workspaceRoot;
+  }
+
+  listToolNames(access: ToolAccess = 'full'): ToolName[] {
+    if (access === 'read_only') {
+      return ['read_file', 'list_files', 'search_files'];
+    }
+
     return ['read_file', 'write_file', 'list_files', 'search_files', 'run_command'];
   }
 
-  async execute(call: ToolCall): Promise<ToolResult> {
+  async execute(call: ToolCall, options: ExecuteOptions = {}): Promise<ToolResult> {
+    const access = options.access ?? 'full';
+    if (access === 'read_only' && !this.listToolNames('read_only').includes(call.name)) {
+      return { ok: false, output: `Tool ${call.name} is not allowed in read-only mode` };
+    }
+
     try {
       if (call.name === 'read_file') {
         const filePath = this.resolvePath(String(call.input.path ?? ''));
         const content = await fs.readFile(filePath, 'utf8');
-        return { ok: true, output: content };
+        return { ok: true, output: this.limitOutput(content) };
       }
 
       if (call.name === 'write_file') {
@@ -42,13 +62,13 @@ export class ToolExecutor {
         const content = String(call.input.content ?? '');
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.writeFile(filePath, content, 'utf8');
-        return { ok: true, output: `Wrote ${filePath}` };
+        return { ok: true, output: `Wrote ${path.relative(this.workspaceRoot, filePath)}` };
       }
 
       if (call.name === 'list_files') {
         const target = this.resolvePath(String(call.input.path ?? '.'));
         const entries = await this.walk(target, 0, 3);
-        return { ok: true, output: entries.join('\n') };
+        return { ok: true, output: this.limitOutput(entries.join('\n')) };
       }
 
       if (call.name === 'search_files') {
@@ -63,16 +83,23 @@ export class ToolExecutor {
         for (const relativePath of files) {
           const filePath = path.join(this.workspaceRoot, relativePath);
           try {
+            const stat = await fs.stat(filePath);
+            if (stat.size > 400_000) {
+              continue;
+            }
             const content = await fs.readFile(filePath, 'utf8');
             if (content.toLowerCase().includes(query.toLowerCase())) {
               hits.push(relativePath);
+              if (hits.length >= 80) {
+                break;
+              }
             }
           } catch {
             continue;
           }
         }
 
-        return { ok: true, output: hits.join('\n') || 'No matches' };
+        return { ok: true, output: this.limitOutput(hits.join('\n') || 'No matches') };
       }
 
       if (call.name === 'run_command') {
@@ -85,7 +112,7 @@ export class ToolExecutor {
           timeout: 120000,
           maxBuffer: 1024 * 1024
         });
-        return { ok: true, output: `${stdout}${stderr}`.trim() || 'Command finished' };
+        return { ok: true, output: this.limitOutput(`${stdout}${stderr}`.trim() || 'Command finished') };
       }
 
       return { ok: false, output: `Unknown tool: ${call.name}` };
@@ -98,7 +125,9 @@ export class ToolExecutor {
   private resolvePath(inputPath: string): string {
     const target = inputPath.trim() || '.';
     const absolute = path.resolve(this.workspaceRoot, target);
-    if (!absolute.startsWith(this.workspaceRoot)) {
+    const relative = path.relative(this.workspaceRoot, absolute);
+    const inside = relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+    if (!inside) {
       throw new Error('Path must stay inside workspace');
     }
     return absolute;
@@ -112,7 +141,7 @@ export class ToolExecutor {
     const output: string[] = [];
     const entries = await fs.readdir(targetPath, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === 'dist') {
+      if (SKIP_DIRS.has(entry.name)) {
         continue;
       }
 
@@ -127,5 +156,19 @@ export class ToolExecutor {
       }
     }
     return output;
+  }
+
+  private limitOutput(text: string): string {
+    const normalized = text.trim();
+    if (!normalized) {
+      return '(empty)';
+    }
+
+    const maxChars = 12_000;
+    if (normalized.length <= maxChars) {
+      return normalized;
+    }
+
+    return `${normalized.slice(0, maxChars)}\n\n[output truncated]`;
   }
 }
