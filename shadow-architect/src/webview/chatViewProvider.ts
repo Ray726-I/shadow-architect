@@ -6,7 +6,7 @@ import {
   listModels,
   type ProviderName
 } from '../provider';
-import { Agent, type AgentMode } from '../agent/agent';
+import { Agent, type AgentMode, type AgentEvent } from '../agent/agent';
 import { ToolExecutor } from '../agent/tools';
 import { ShadowWorkspace, type ChatSession, type SessionMessage } from '../workspace/workspace';
 
@@ -460,7 +460,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     try {
-      const reply = await this.agent.run({ mode, userText: text });
+      webviewView.webview.postMessage({
+        type: 'chatStart',
+        mode
+      });
+
+      const reply = await this.agent.run({
+        mode,
+        userText: text,
+        onEvent: event => this.forwardAgentEvent(webviewView, event)
+      });
 
       if (this.isRegisteredProject) {
         await this.appendToSession({ role: 'assistant', text: reply });
@@ -486,7 +495,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         role: 'assistant',
         content
       });
+    } finally {
+      webviewView.webview.postMessage({
+        type: 'chatEnd',
+        mode
+      });
     }
+  }
+
+  private forwardAgentEvent(webviewView: vscode.WebviewView, event: AgentEvent) {
+    webviewView.webview.postMessage({
+      type: 'agentEvent',
+      event
+    });
   }
 
   private getHtml(webview: vscode.Webview): string {
@@ -538,6 +559,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <div id="history-list"></div>
   </div>
   <div id="messages"></div>
+  <div id="typing" class="typing hidden">
+    <span></span>
+    <span></span>
+    <span></span>
+  </div>
   <div id="mode-row">
     <button class="mode-btn active" data-mode="chat">Chat</button>
     <button class="mode-btn" data-mode="fix">Fix</button>
@@ -547,6 +573,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <textarea id="input" rows="2" placeholder="Ask anything..."></textarea>
     <button id="send">Send</button>
   </div>
+  <div id="status-bar"></div>
   <script src="${markedUri}"></script>
   <script src="${highlightUri}"></script>
   <script src="${domPurifyUri}"></script>

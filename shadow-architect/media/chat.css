@@ -213,23 +213,41 @@ body {
 }
 
 .message {
+  max-width: 100%;
+  animation: fade-in 0.14s ease;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.message-bubble {
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 13px;
   line-height: 1.5;
-  max-width: 100%;
   word-wrap: break-word;
 }
 
 .message.user {
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
   align-self: flex-end;
 }
 
+.message.user .message-bubble {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-bottom-right-radius: 3px;
+}
+
 .message.assistant {
-  background: var(--vscode-editor-inactiveSelectionBackground);
   align-self: flex-start;
+}
+
+.message.assistant .message-bubble {
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-bottom-left-radius: 3px;
 }
 
 .message.assistant p {
@@ -341,4 +359,156 @@ body {
 
 #send:hover {
   background: var(--vscode-button-hoverBackground);
+}
+
+#status-bar {
+  display: none;
+}
+
+.typing {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  min-height: 16px;
+  padding: 0 2px 6px;
+}
+
+.typing.hidden {
+  display: none;
+}
+
+.typing span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vscode-descriptionForeground);
+  animation: typing-bounce 1.2s infinite ease-in-out;
+}
+
+.typing span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typing-bounce {
+  0%, 80%, 100% { transform: scale(0.7); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+.agent-timeline {
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--vscode-editor-background);
+  animation: fade-in 0.14s ease;
+}
+
+.agent-timeline.fix .timeline-header {
+  background: rgba(204, 167, 0, 0.09);
+}
+
+.agent-timeline.build .timeline-header {
+  background: rgba(56, 132, 255, 0.1);
+}
+
+.timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.timeline-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.timeline-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.timeline-body {
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.timeline-line {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--vscode-foreground);
+}
+
+.timeline-line.iteration {
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+}
+
+.timeline-line.status {
+  color: var(--vscode-descriptionForeground);
+}
+
+.timeline-line.thinking {
+  color: var(--vscode-descriptionForeground);
+}
+
+.timeline-line.analysis {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border-left: 2px solid var(--vscode-textLink-foreground);
+  background: rgba(128, 128, 128, 0.06);
+  white-space: pre-wrap;
+}
+
+.timeline-line.tool-call {
+  color: var(--vscode-foreground);
+}
+
+.timeline-line.tool-ok {
+  color: var(--vscode-charts-green, #4ec9b0);
+}
+
+.timeline-line.tool-error {
+  color: var(--vscode-errorForeground);
+}
+
+.timeline-line.complete {
+  font-weight: 600;
+  color: var(--vscode-charts-green, #4ec9b0);
+}
+
+.tool-output {
+  margin-top: 6px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.tool-output summary {
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-textCodeBlock-background);
+}
+
+.tool-output pre {
+  margin: 0;
+  padding: 8px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  background: var(--vscode-editor-background);
 }

@@ -1,4 +1,5 @@
 const vscode = acquireVsCodeApi();
+
 const messages = document.getElementById('messages');
 const input = document.getElementById('input');
 const send = document.getElementById('send');
@@ -10,14 +11,23 @@ const historyToggle = document.getElementById('history-toggle');
 const historyPanel = document.getElementById('history-panel');
 const historyList = document.getElementById('history-list');
 const historyEmpty = document.getElementById('history-empty');
+const typing = document.getElementById('typing');
+
 let currentMode = 'chat';
 let activeSessionId = '';
 let isRegisteredProject = false;
 let isHistoryOpen = false;
+let activeTimeline = null;
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
 
 function renderAssistantHtml(content) {
   if (!window.marked || !window.DOMPurify) {
-    return content;
+    return escapeHtml(content);
   }
 
   const html = window.marked.parse(content, {
@@ -54,22 +64,217 @@ function setModelOptions(models, selectedModel) {
 }
 
 function addMessage(role, content) {
-  const div = document.createElement('div');
-  div.className = 'message ' + role;
+  const item = document.createElement('div');
+  item.className = `message ${role}`;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'message-bubble';
 
   if (role === 'assistant') {
-    div.innerHTML = renderAssistantHtml(content);
-    highlightCodeBlocks(div);
+    bubble.classList.add('markdown-body');
+    bubble.innerHTML = renderAssistantHtml(content);
+    highlightCodeBlocks(bubble);
   } else {
-    div.textContent = content;
+    bubble.textContent = content;
   }
 
-  messages.appendChild(div);
-  messages.scrollTop = messages.scrollHeight;
+  item.appendChild(bubble);
+  messages.appendChild(item);
+  scrollToBottom();
 }
 
 function clearMessages() {
   messages.innerHTML = '';
+  activeTimeline = null;
+}
+
+function scrollToBottom() {
+  requestAnimationFrame(() => {
+    messages.scrollTop = messages.scrollHeight;
+  });
+}
+
+function setHistoryOpen(next) {
+  isHistoryOpen = next;
+  historyPanel.hidden = !next;
+  historyToggle.classList.toggle('active', next);
+}
+
+function setTyping(isVisible) {
+  if (!typing) {
+    return;
+  }
+  typing.classList.toggle('hidden', !isVisible);
+}
+
+function buildTimelineCard(mode) {
+  const card = document.createElement('section');
+  card.className = `agent-timeline ${mode}`;
+
+  const header = document.createElement('div');
+  header.className = 'timeline-header';
+
+  const title = document.createElement('div');
+  title.className = 'timeline-title';
+  title.textContent = mode === 'fix' ? 'Fix Execution' : mode === 'build' ? 'Build Execution' : 'Agent Execution';
+
+  const badge = document.createElement('div');
+  badge.className = 'timeline-badge';
+  badge.textContent = mode.toUpperCase();
+
+  header.appendChild(title);
+  header.appendChild(badge);
+
+  const body = document.createElement('div');
+  body.className = 'timeline-body';
+
+  card.appendChild(header);
+  card.appendChild(body);
+  messages.appendChild(card);
+
+  return {
+    mode,
+    card,
+    body,
+    lines: [],
+    statusLine: null,
+    activeToolLine: null,
+    iterLine: null
+  };
+}
+
+function addTimelineLine(text, kind) {
+  if (!activeTimeline) {
+    activeTimeline = buildTimelineCard(currentMode);
+  }
+
+  const line = document.createElement('div');
+  line.className = `timeline-line ${kind || 'note'}`;
+  line.textContent = text;
+  activeTimeline.body.appendChild(line);
+  activeTimeline.lines.push(line);
+  scrollToBottom();
+  return line;
+}
+
+function updateIterationLine(event) {
+  if (!activeTimeline) {
+    activeTimeline = buildTimelineCard(event.mode || currentMode);
+  }
+
+  const total = Number.isFinite(event.total) ? event.total : 0;
+  const current = Number.isFinite(event.iteration) ? event.iteration : 0;
+  const phase = typeof event.phase === 'string' ? ` ${event.phase.toUpperCase()}` : '';
+  let label = `${(event.mode || currentMode).toUpperCase()}${phase}`;
+  if (current > 0 && total > 0) {
+    label += ` ${current}/${total}`;
+  }
+
+  if (!activeTimeline.iterLine) {
+    activeTimeline.iterLine = addTimelineLine(label, 'iteration');
+    return;
+  }
+
+  activeTimeline.iterLine.textContent = label;
+}
+
+function updateStatusLine(text) {
+  if (!text) {
+    return;
+  }
+
+  if (!activeTimeline) {
+    activeTimeline = buildTimelineCard(currentMode);
+  }
+
+  if (!activeTimeline.statusLine) {
+    activeTimeline.statusLine = addTimelineLine(text, 'status');
+    return;
+  }
+
+  activeTimeline.statusLine.textContent = text;
+}
+
+function addToolCallLine(event) {
+  const line = addTimelineLine(event.message || `Using ${event.toolName || 'tool'}`, 'tool-call');
+  if (activeTimeline) {
+    activeTimeline.activeToolLine = line;
+  }
+}
+
+function addToolResultLine(event) {
+  const ok = event.ok !== false;
+  const short = (event.message || '').trim() || `${event.toolName || 'tool'} ${ok ? 'succeeded' : 'failed'}`;
+  const line = addTimelineLine(short, ok ? 'tool-ok' : 'tool-error');
+
+  const output = typeof event.output === 'string' ? event.output.trim() : '';
+  if (output) {
+    const detail = document.createElement('details');
+    detail.className = 'tool-output';
+
+    const summary = document.createElement('summary');
+    summary.textContent = 'Output';
+
+    const pre = document.createElement('pre');
+    pre.textContent = output.length > 4000 ? `${output.slice(0, 4000)}\n\n[output truncated]` : output;
+
+    detail.appendChild(summary);
+    detail.appendChild(pre);
+    line.appendChild(detail);
+  }
+
+  if (activeTimeline) {
+    activeTimeline.activeToolLine = null;
+  }
+}
+
+function renderAgentEvent(event) {
+  if (!event || typeof event !== 'object') {
+    return;
+  }
+
+  if (event.type === 'fix_iteration' || event.type === 'build_iteration') {
+    updateIterationLine(event);
+    return;
+  }
+
+  if (event.type === 'status') {
+    updateStatusLine(event.message || 'Working...');
+    return;
+  }
+
+  if (event.type === 'thinking') {
+    if (event.message) {
+      addTimelineLine(event.message, 'thinking');
+    }
+    return;
+  }
+
+  if (event.type === 'tool_call') {
+    addToolCallLine(event);
+    return;
+  }
+
+  if (event.type === 'tool_result') {
+    addToolResultLine(event);
+    return;
+  }
+
+  if (event.type === 'fix_diagnosis' || event.type === 'build_plan') {
+    if (event.message) {
+      addTimelineLine(event.message, 'analysis');
+    }
+    return;
+  }
+
+  if (event.type === 'error') {
+    addTimelineLine(event.message || 'Error', 'tool-error');
+    return;
+  }
+
+  if (event.type === 'fix_complete' || event.type === 'build_complete') {
+    addTimelineLine(event.message || 'Complete', 'complete');
+  }
 }
 
 function formatDate(isoDate) {
@@ -77,12 +282,6 @@ function formatDate(isoDate) {
   const date = new Date(isoDate);
   if (Number.isNaN(date.getTime())) return '';
   return date.toLocaleString();
-}
-
-function setHistoryOpen(next) {
-  isHistoryOpen = next;
-  historyPanel.hidden = !next;
-  historyToggle.classList.toggle('active', next);
 }
 
 function renderHistoryList(sessions) {
@@ -139,12 +338,10 @@ function renderHistoryList(sessions) {
     deleteButton.textContent = '🗑';
     deleteButton.addEventListener('click', event => {
       event.stopPropagation();
-
       const ok = window.confirm(`Delete chat "${session.name || 'Untitled'}"?`);
       if (!ok) {
         return;
       }
-
       vscode.postMessage({ type: 'deleteSession', sessionId: session.id });
     });
 
@@ -156,7 +353,10 @@ function renderHistoryList(sessions) {
 
 send.onclick = () => {
   const text = input.value.trim();
-  if (!text) return;
+  if (!text) {
+    return;
+  }
+
   addMessage('user', text);
   vscode.postMessage({ type: 'chat', text, mode: currentMode });
   input.value = '';
@@ -165,8 +365,8 @@ send.onclick = () => {
 for (const button of modeButtons) {
   button.addEventListener('click', () => {
     currentMode = button.dataset.mode || 'chat';
-    for (const item of modeButtons) {
-      item.classList.toggle('active', item === button);
+    for (const node of modeButtons) {
+      node.classList.toggle('active', node === button);
     }
   });
 }
@@ -194,8 +394,8 @@ document.addEventListener('click', event => {
   }
 
   const insideHistory = historyPanel.contains(target);
-  const insideHistoryButton = historyToggle.contains(target);
-  if (!insideHistory && !insideHistoryButton) {
+  const insideHistoryBtn = historyToggle.contains(target);
+  if (!insideHistory && !insideHistoryBtn) {
     setHistoryOpen(false);
   }
 });
@@ -208,15 +408,16 @@ model.addEventListener('change', () => {
   vscode.postMessage({ type: 'setModel', model: model.value });
 });
 
-input.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
+input.addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
     send.click();
   }
 });
 
-window.addEventListener('message', e => {
-  const msg = e.data;
+window.addEventListener('message', event => {
+  const msg = event.data;
+
   if (msg.type === 'addMessage') {
     addMessage(msg.role, msg.content);
     return;
@@ -236,6 +437,7 @@ window.addEventListener('message', e => {
       if (!item || typeof item !== 'object') {
         continue;
       }
+
       const role = item.role === 'assistant' ? 'assistant' : 'user';
       const text = typeof item.text === 'string' ? item.text : '';
       if (!text) {
@@ -243,12 +445,30 @@ window.addEventListener('message', e => {
       }
       addMessage(role, text);
     }
+
     vscode.postMessage({ type: 'getHistory' });
     return;
   }
 
   if (msg.type === 'historyList') {
     renderHistoryList(msg.sessions);
+    return;
+  }
+
+  if (msg.type === 'chatStart') {
+    setTyping(true);
+    activeTimeline = null;
+    return;
+  }
+
+  if (msg.type === 'chatEnd') {
+    setTyping(false);
+    activeTimeline = null;
+    return;
+  }
+
+  if (msg.type === 'agentEvent') {
+    renderAgentEvent(msg.event);
     return;
   }
 
