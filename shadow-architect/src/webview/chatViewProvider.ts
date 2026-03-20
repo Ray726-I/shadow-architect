@@ -12,11 +12,14 @@ import { ShadowWorkspace, type ChatSession, type SessionMessage } from '../works
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'shadow-architect.chatView';
+
   private readonly agent: Agent;
+  private webviewView: vscode.WebviewView | null = null;
   private currentSession: ChatSession | null = null;
+  private isRegisteredProject = false;
 
   constructor(
-    private readonly _extensionUri: vscode.Uri,
+    private readonly extensionUri: vscode.Uri,
     private readonly shadowWorkspace: ShadowWorkspace,
     workspacePath: string
   ) {
@@ -24,20 +27,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView) {
+    this.webviewView = webviewView;
+
     webviewView.webview.options = {
       enableScripts: true,
-      localResourceRoots: [this._extensionUri]
+      localResourceRoots: [this.extensionUri]
     };
 
-    webviewView.webview.html = this._getHtml(webviewView.webview);
+    webviewView.webview.html = this.getHtml(webviewView.webview);
 
     const configSubscription = vscode.workspace.onDidChangeConfiguration(event => {
       if (event.affectsConfiguration('shadow-architect.provider') || event.affectsConfiguration('shadow-architect.model')) {
         this.sendModelList(webviewView);
       }
     });
+
     webviewView.onDidDispose(() => {
       configSubscription.dispose();
+      this.webviewView = null;
     });
 
     webviewView.webview.onDidReceiveMessage(message => {
@@ -49,6 +56,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       if (message.type === 'ready') {
         this.handleReady(webviewView);
+        return;
+      }
+
+      if (message.type === 'getHistory') {
+        this.sendHistoryList(webviewView);
+        return;
+      }
+
+      if (message.type === 'loadSession') {
+        this.handleLoadSession(webviewView, String(message.sessionId ?? ''));
+        return;
+      }
+
+      if (message.type === 'deleteSession') {
+        this.handleDeleteSession(webviewView, String(message.sessionId ?? ''));
+        return;
+      }
+
+      if (message.type === 'newChat') {
+        this.handleNewChat(webviewView);
         return;
       }
 
@@ -68,23 +95,90 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private async handleReady(webviewView: vscode.WebviewView) {
-    await this.ensureCurrentSession();
+  async initializeCurrentWorkspaceAsShadowProject(projectName?: string) {
+    const defaultName = vscode.workspace.name || 'Shadow Project';
+    const name = projectName?.trim() || defaultName;
 
-    if (!this.currentSession) {
+    await this.shadowWorkspace.registerProject(name);
+    this.isRegisteredProject = true;
+    await this.shadowWorkspace.touchRegisteredProject();
+
+    this.currentSession = this.createEmptySession();
+    await this.shadowWorkspace.saveChatSession(this.currentSession);
+
+    const currentSession = this.currentSession;
+    if (this.webviewView && currentSession) {
+      this.webviewView.webview.postMessage({
+        type: 'projectStatus',
+        isRegistered: true
+      });
+
+      this.webviewView.webview.postMessage({
+        type: 'sessionLoaded',
+        sessionId: currentSession.id,
+        messages: currentSession.messages
+      });
+
+      await this.sendHistoryList(this.webviewView);
+    }
+  }
+
+  private normalizeMode(mode: string): AgentMode {
+    if (mode === 'fix') {
+      return 'fix';
+    }
+
+    if (mode === 'build') {
+      return 'build';
+    }
+
+    return 'chat';
+  }
+
+  private async handleReady(webviewView: vscode.WebviewView) {
+    this.isRegisteredProject = await this.shadowWorkspace.isRegistered();
+
+    webviewView.webview.postMessage({
+      type: 'projectStatus',
+      isRegistered: this.isRegisteredProject
+    });
+
+    if (!this.isRegisteredProject) {
+      this.currentSession = null;
+      webviewView.webview.postMessage({
+        type: 'sessionLoaded',
+        sessionId: 'ephemeral',
+        messages: []
+      });
+      webviewView.webview.postMessage({
+        type: 'historyList',
+        sessions: []
+      });
       return;
     }
 
-    webviewView.webview.postMessage({
-      type: 'sessionLoaded',
-      sessionId: this.currentSession.id,
-      messages: this.currentSession.messages
-    });
+    await this.shadowWorkspace.touchRegisteredProject();
+    const currentSession = await this.ensureCurrentSession();
+
+    if (currentSession) {
+      webviewView.webview.postMessage({
+        type: 'sessionLoaded',
+        sessionId: currentSession.id,
+        messages: currentSession.messages
+      });
+    }
+
+    await this.sendHistoryList(webviewView);
   }
 
-  private async ensureCurrentSession() {
+  private async ensureCurrentSession(): Promise<ChatSession | null> {
+    if (!this.isRegisteredProject) {
+      this.currentSession = null;
+      return null;
+    }
+
     if (this.currentSession) {
-      return;
+      return this.currentSession;
     }
 
     const sessions = await this.shadowWorkspace.listChatSessions();
@@ -92,12 +186,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const latest = await this.shadowWorkspace.getChatSession(sessions[0].id);
       if (latest) {
         this.currentSession = latest;
-        return;
+        return this.currentSession;
       }
     }
 
     this.currentSession = this.createEmptySession();
     await this.shadowWorkspace.saveChatSession(this.currentSession);
+    return this.currentSession;
   }
 
   private createEmptySession(): ChatSession {
@@ -121,35 +216,130 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async appendToSession(message: SessionMessage) {
+    if (!this.isRegisteredProject) {
+      return;
+    }
+
     try {
-      await this.ensureCurrentSession();
-      if (!this.currentSession) {
+      const currentSession = await this.ensureCurrentSession();
+      if (!currentSession) {
         return;
       }
 
       const isFirstUserMessage = message.role === 'user'
-        && !this.currentSession.messages.some(item => item.role === 'user');
+        && !currentSession.messages.some(item => item.role === 'user');
 
-      this.currentSession.messages.push(message);
+      currentSession.messages.push(message);
       if (isFirstUserMessage) {
-        this.currentSession.name = this.buildSessionName(message.text);
+        currentSession.name = this.buildSessionName(message.text);
       }
 
-      this.currentSession.updatedAt = new Date().toISOString();
-      await this.shadowWorkspace.saveChatSession(this.currentSession);
+      currentSession.updatedAt = new Date().toISOString();
+      await this.shadowWorkspace.saveChatSession(currentSession);
+      await this.sendHistoryList();
     } catch (error) {
       console.error('Failed to save chat session', error);
     }
   }
 
-  private normalizeMode(mode: string): AgentMode {
-    if (mode === 'fix') {
-      return 'fix';
+  private async sendHistoryList(view?: vscode.WebviewView) {
+    const target = view ?? this.webviewView;
+    if (!target) {
+      return;
     }
-    if (mode === 'build') {
-      return 'build';
+
+    if (!this.isRegisteredProject) {
+      target.webview.postMessage({
+        type: 'historyList',
+        sessions: []
+      });
+      return;
     }
-    return 'chat';
+
+    const sessions = await this.shadowWorkspace.listChatSessions();
+    target.webview.postMessage({
+      type: 'historyList',
+      sessions
+    });
+  }
+
+  private async handleLoadSession(webviewView: vscode.WebviewView, sessionId: string) {
+    if (!this.isRegisteredProject) {
+      return;
+    }
+
+    const id = sessionId.trim();
+    if (!id) {
+      return;
+    }
+
+    const session = await this.shadowWorkspace.getChatSession(id);
+    if (!session) {
+      return;
+    }
+
+    this.currentSession = session;
+    webviewView.webview.postMessage({
+      type: 'sessionLoaded',
+      sessionId: session.id,
+      messages: session.messages
+    });
+  }
+
+  private async handleDeleteSession(webviewView: vscode.WebviewView, sessionId: string) {
+    if (!this.isRegisteredProject) {
+      return;
+    }
+
+    const id = sessionId.trim();
+    if (!id) {
+      return;
+    }
+
+    const deletingCurrent = this.currentSession?.id === id;
+    await this.shadowWorkspace.deleteChatSession(id);
+
+    if (deletingCurrent) {
+      this.currentSession = null;
+      const currentSession = await this.ensureCurrentSession();
+
+      if (currentSession) {
+        webviewView.webview.postMessage({
+          type: 'sessionLoaded',
+          sessionId: currentSession.id,
+          messages: currentSession.messages
+        });
+      } else {
+        webviewView.webview.postMessage({
+          type: 'sessionLoaded',
+          sessionId: 'ephemeral',
+          messages: []
+        });
+      }
+    }
+
+    await this.sendHistoryList(webviewView);
+  }
+
+  private async handleNewChat(webviewView: vscode.WebviewView) {
+    if (!this.isRegisteredProject) {
+      this.currentSession = null;
+      webviewView.webview.postMessage({
+        type: 'sessionLoaded',
+        sessionId: 'ephemeral',
+        messages: []
+      });
+      return;
+    }
+
+    this.currentSession = this.createEmptySession();
+    await this.shadowWorkspace.saveChatSession(this.currentSession);
+    webviewView.webview.postMessage({
+      type: 'sessionLoaded',
+      sessionId: this.currentSession.id,
+      messages: []
+    });
+    await this.sendHistoryList(webviewView);
   }
 
   private async handleSetProvider(webviewView: vscode.WebviewView, provider: string) {
@@ -207,15 +397,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    await this.appendToSession({ role: 'user', text });
+    if (this.isRegisteredProject) {
+      await this.appendToSession({ role: 'user', text });
+    }
 
     try {
-      const reply = await this.agent.run({
-        mode,
-        userText: text
-      });
+      const reply = await this.agent.run({ mode, userText: text });
 
-      await this.appendToSession({ role: 'assistant', text: reply });
+      if (this.isRegisteredProject) {
+        await this.appendToSession({ role: 'assistant', text: reply });
+      }
 
       webviewView.webview.postMessage({
         type: 'addMessage',
@@ -225,7 +416,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Request failed';
       const content = `Error: ${message}`;
-      await this.appendToSession({ role: 'assistant', text: content });
+
+      if (this.isRegisteredProject) {
+        await this.appendToSession({ role: 'assistant', text: content });
+      }
 
       webviewView.webview.postMessage({
         type: 'addMessage',
@@ -235,21 +429,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private _getHtml(webview: vscode.Webview): string {
+  private getHtml(webview: vscode.Webview): string {
     const cssUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this._extensionUri, 'media', 'chat.css')
+      vscode.Uri.joinPath(this.extensionUri, 'media', 'chat.css')
     );
     const jsUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this._extensionUri, 'media', 'chat.js')
+      vscode.Uri.joinPath(this.extensionUri, 'media', 'chat.js')
     );
     const markedUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this._extensionUri, 'media', 'vendor', 'marked.min.js')
+      vscode.Uri.joinPath(this.extensionUri, 'media', 'vendor', 'marked.min.js')
     );
     const highlightUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this._extensionUri, 'media', 'vendor', 'highlight.min.js')
+      vscode.Uri.joinPath(this.extensionUri, 'media', 'vendor', 'highlight.min.js')
     );
     const domPurifyUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this._extensionUri, 'media', 'vendor', 'dompurify.min.js')
+      vscode.Uri.joinPath(this.extensionUri, 'media', 'vendor', 'dompurify.min.js')
     );
 
     return `<!DOCTYPE html>
@@ -261,12 +455,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
   <div id="toolbar">
-    <label for="provider">AI</label>
-    <select id="provider">
-      <option value="ollama">Ollama</option>
-      <option value="openai">OpenAI</option>
-    </select>
-    <select id="model"></select>
+    <div id="model-controls">
+      <label for="provider">AI</label>
+      <select id="provider">
+        <option value="ollama">Ollama</option>
+        <option value="openai">OpenAI</option>
+      </select>
+      <select id="model"></select>
+    </div>
+    <div id="toolbar-actions">
+      <button id="new-chat-icon" class="icon-btn" title="New Chat" aria-label="New Chat">
+        <span aria-hidden="true">+</span>
+      </button>
+      <button id="history-toggle" class="icon-btn" title="History" aria-label="History">
+        <span aria-hidden="true">🕘</span>
+      </button>
+    </div>
+  </div>
+  <div id="history-panel" hidden>
+    <div id="history-title">History</div>
+    <div id="history-empty"></div>
+    <div id="history-list"></div>
   </div>
   <div id="messages"></div>
   <div id="mode-row">
