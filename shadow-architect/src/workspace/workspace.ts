@@ -35,6 +35,20 @@ export interface RegisteredProject {
   lastUsedAt: string;
 }
 
+export interface HistoryEntry {
+  timestamp: string;
+  mode: 'chat' | 'fix' | 'build';
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface ProjectContext {
+  projectId: string;
+  decisions: string[];
+  techStack: string[];
+  lastAccessed: string;
+}
+
 interface RegistryFile {
   projects: RegisteredProject[];
 }
@@ -49,52 +63,6 @@ export class ShadowWorkspace {
     this.workspacePath = path.resolve(workspacePath);
   }
 
-  async isRegistered(): Promise<boolean> {
-    const registry = await this.readRegistry();
-    const projectId = await this.getProjectId();
-    return registry.projects.some(item => item.id === projectId);
-  }
-
-  async registerProject(name: string): Promise<RegisteredProject> {
-    const registry = await this.readRegistry();
-    const projectId = await this.getProjectId();
-    const now = new Date().toISOString();
-    const normalizedName = name.trim() || path.basename(this.workspacePath) || 'Shadow Project';
-
-    const existing = registry.projects.find(item => item.id === projectId);
-    if (existing) {
-      existing.name = normalizedName;
-      existing.path = this.workspacePath;
-      existing.lastUsedAt = now;
-      await this.writeRegistry(registry);
-      return existing;
-    }
-
-    const project: RegisteredProject = {
-      id: projectId,
-      name: normalizedName,
-      path: this.workspacePath,
-      createdAt: now,
-      lastUsedAt: now
-    };
-
-    registry.projects.push(project);
-    await this.writeRegistry(registry);
-    return project;
-  }
-
-  async touchRegisteredProject(): Promise<void> {
-    const registry = await this.readRegistry();
-    const projectId = await this.getProjectId();
-    const existing = registry.projects.find(item => item.id === projectId);
-    if (!existing) {
-      return;
-    }
-
-    existing.lastUsedAt = new Date().toISOString();
-    await this.writeRegistry(registry);
-  }
-
   async getProjectId(): Promise<string> {
     if (!this.projectIdPromise) {
       this.projectIdPromise = this.computeProjectId();
@@ -105,6 +73,77 @@ export class ShadowWorkspace {
   async getProjectDir(): Promise<string> {
     const projectId = await this.getProjectId();
     return path.join(this.storagePath, 'projects', projectId);
+  }
+
+  async isRegistered(): Promise<boolean> {
+    const registry = await this.readRegistry();
+    const projectId = await this.getProjectId();
+    return registry.projects.some(project => project.id === projectId);
+  }
+
+  async registerProject(name: string): Promise<RegisteredProject> {
+    const registry = await this.readRegistry();
+    const projectId = await this.getProjectId();
+    const now = new Date().toISOString();
+    const normalizedName = name.trim() || path.basename(this.workspacePath) || 'Shadow Project';
+
+    const existing = registry.projects.find(project => project.id === projectId);
+    if (existing) {
+      existing.name = normalizedName;
+      existing.path = this.workspacePath;
+      existing.lastUsedAt = now;
+      await this.writeRegistry(registry);
+      return existing;
+    }
+
+    const registeredProject: RegisteredProject = {
+      id: projectId,
+      name: normalizedName,
+      path: this.workspacePath,
+      createdAt: now,
+      lastUsedAt: now
+    };
+
+    registry.projects.push(registeredProject);
+    await this.writeRegistry(registry);
+    return registeredProject;
+  }
+
+  async touchRegisteredProject(): Promise<void> {
+    const registry = await this.readRegistry();
+    const projectId = await this.getProjectId();
+    const existing = registry.projects.find(project => project.id === projectId);
+    if (!existing) {
+      return;
+    }
+
+    existing.lastUsedAt = new Date().toISOString();
+    await this.writeRegistry(registry);
+  }
+
+  async listRegisteredProjects(): Promise<RegisteredProject[]> {
+    const registry = await this.readRegistry();
+    return [...registry.projects].sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt));
+  }
+
+  async deleteRegisteredProject(id: string): Promise<boolean> {
+    const projectId = id.trim();
+    if (!projectId) {
+      return false;
+    }
+
+    const registry = await this.readRegistry();
+    const index = registry.projects.findIndex(project => project.id === projectId);
+    if (index === -1) {
+      return false;
+    }
+
+    registry.projects.splice(index, 1);
+    await this.writeRegistry(registry);
+
+    const projectDir = path.join(this.storagePath, 'projects', projectId);
+    await fs.rm(projectDir, { recursive: true, force: true });
+    return true;
   }
 
   async saveChatSession(session: ChatSession): Promise<void> {
@@ -143,20 +182,109 @@ export class ShadowWorkspace {
   }
 
   async getChatSession(id: string): Promise<ChatSession | null> {
+    const sessionId = id.trim();
+    if (!sessionId) {
+      return null;
+    }
+
     const sessionsDir = await this.getSessionsDir();
-    const filePath = path.join(sessionsDir, `${id}.json`);
+    const filePath = path.join(sessionsDir, `${sessionId}.json`);
     return this.readSessionFile(filePath);
   }
 
   async deleteChatSession(id: string): Promise<void> {
+    const sessionId = id.trim();
+    if (!sessionId) {
+      return;
+    }
+
     const sessionsDir = await this.getSessionsDir();
-    const filePath = path.join(sessionsDir, `${id}.json`);
+    const filePath = path.join(sessionsDir, `${sessionId}.json`);
     await fs.rm(filePath, { force: true });
+  }
+
+  async loadContext(): Promise<ProjectContext> {
+    const contextPath = await this.getContextPath();
+    const defaultContext: ProjectContext = {
+      projectId: await this.getProjectId(),
+      decisions: [],
+      techStack: [],
+      lastAccessed: new Date().toISOString()
+    };
+
+    try {
+      const text = await fs.readFile(contextPath, 'utf8');
+      const parsed = JSON.parse(text) as Partial<ProjectContext>;
+      const context: ProjectContext = {
+        projectId: typeof parsed.projectId === 'string' ? parsed.projectId : defaultContext.projectId,
+        decisions: Array.isArray(parsed.decisions) ? parsed.decisions.filter(item => typeof item === 'string') : [],
+        techStack: Array.isArray(parsed.techStack) ? parsed.techStack.filter(item => typeof item === 'string') : [],
+        lastAccessed: typeof parsed.lastAccessed === 'string' ? parsed.lastAccessed : defaultContext.lastAccessed
+      };
+      context.lastAccessed = new Date().toISOString();
+      await this.saveContext(context);
+      return context;
+    } catch {
+      await this.saveContext(defaultContext);
+      return defaultContext;
+    }
+  }
+
+  async saveContext(context: ProjectContext): Promise<void> {
+    const contextPath = await this.getContextPath();
+    await fs.mkdir(path.dirname(contextPath), { recursive: true });
+    await fs.writeFile(contextPath, JSON.stringify(context, null, 2), 'utf8');
+  }
+
+  async addDecision(decision: string): Promise<void> {
+    const trimmed = decision.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    const context = await this.loadContext();
+    context.decisions.push(trimmed);
+    context.lastAccessed = new Date().toISOString();
+    await this.saveContext(context);
+  }
+
+  async appendHistory(entry: HistoryEntry): Promise<void> {
+    const historyPath = await this.getHistoryPath();
+    await fs.mkdir(path.dirname(historyPath), { recursive: true });
+    const line = `${JSON.stringify(entry)}\n`;
+    await fs.appendFile(historyPath, line, 'utf8');
+  }
+
+  async buildContextPrompt(): Promise<string> {
+    const context = await this.loadContext();
+    const decisions = context.decisions.length > 0
+      ? context.decisions.map((item, index) => `${index + 1}. ${item}`).join('\n')
+      : 'None';
+
+    const techStack = context.techStack.length > 0
+      ? context.techStack.join(', ')
+      : 'Unknown';
+
+    return [
+      `Project ID: ${context.projectId}`,
+      `Tech Stack: ${techStack}`,
+      `Decisions:\n${decisions}`
+    ].join('\n\n');
   }
 
   private async getSessionsDir(): Promise<string> {
     const projectDir = await this.getProjectDir();
     return path.join(projectDir, 'sessions');
+  }
+
+  private async getContextPath(): Promise<string> {
+    const projectDir = await this.getProjectDir();
+    return path.join(projectDir, 'context.json');
+  }
+
+  private async getHistoryPath(): Promise<string> {
+    const projectDir = await this.getProjectDir();
+    return path.join(projectDir, 'history.jsonl');
   }
 
   private async computeProjectId(): Promise<string> {
@@ -174,11 +302,19 @@ export class ShadowWorkspace {
       if (!parsed || !Array.isArray(parsed.projects)) {
         return { projects: [] };
       }
-      return {
-        projects: parsed.projects.filter(item => {
-          return Boolean(item && item.id && item.path && item.name && item.createdAt && item.lastUsedAt);
-        })
-      };
+
+      const projects = parsed.projects.filter(project => {
+        return Boolean(
+          project
+          && project.id
+          && project.path
+          && project.name
+          && project.createdAt
+          && project.lastUsedAt
+        );
+      });
+
+      return { projects };
     } catch {
       return { projects: [] };
     }

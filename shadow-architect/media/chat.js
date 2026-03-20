@@ -139,6 +139,12 @@ function renderHistoryList(sessions) {
     deleteButton.textContent = '🗑';
     deleteButton.addEventListener('click', event => {
       event.stopPropagation();
+
+      const ok = window.confirm(`Delete chat "${session.name || 'Untitled'}"?`);
+      if (!ok) {
+        return;
+      }
+
       vscode.postMessage({ type: 'deleteSession', sessionId: session.id });
     });
 

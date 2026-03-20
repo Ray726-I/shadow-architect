@@ -123,6 +123,46 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  async refreshRegistrationState() {
+    this.isRegisteredProject = await this.shadowWorkspace.isRegistered();
+    if (!this.isRegisteredProject) {
+      this.currentSession = null;
+    }
+
+    if (!this.webviewView) {
+      return;
+    }
+
+    this.webviewView.webview.postMessage({
+      type: 'projectStatus',
+      isRegistered: this.isRegisteredProject
+    });
+
+    if (!this.isRegisteredProject) {
+      this.webviewView.webview.postMessage({
+        type: 'sessionLoaded',
+        sessionId: 'ephemeral',
+        messages: []
+      });
+      this.webviewView.webview.postMessage({
+        type: 'historyList',
+        sessions: []
+      });
+      return;
+    }
+
+    await this.shadowWorkspace.touchRegisteredProject();
+    const currentSession = await this.ensureCurrentSession();
+    if (currentSession) {
+      this.webviewView.webview.postMessage({
+        type: 'sessionLoaded',
+        sessionId: currentSession.id,
+        messages: currentSession.messages
+      });
+    }
+    await this.sendHistoryList(this.webviewView);
+  }
+
   private normalizeMode(mode: string): AgentMode {
     if (mode === 'fix') {
       return 'fix';
@@ -239,6 +279,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       await this.sendHistoryList();
     } catch (error) {
       console.error('Failed to save chat session', error);
+    }
+  }
+
+  private async appendProjectHistory(mode: AgentMode, role: 'user' | 'assistant', content: string) {
+    if (!this.isRegisteredProject) {
+      return;
+    }
+
+    try {
+      await this.shadowWorkspace.appendHistory({
+        timestamp: new Date().toISOString(),
+        mode,
+        role,
+        content
+      });
+    } catch (error) {
+      console.error('Failed to append project history', error);
     }
   }
 
@@ -399,6 +456,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     if (this.isRegisteredProject) {
       await this.appendToSession({ role: 'user', text });
+      await this.appendProjectHistory(mode, 'user', text);
     }
 
     try {
@@ -406,6 +464,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       if (this.isRegisteredProject) {
         await this.appendToSession({ role: 'assistant', text: reply });
+        await this.appendProjectHistory(mode, 'assistant', reply);
       }
 
       webviewView.webview.postMessage({
@@ -419,6 +478,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       if (this.isRegisteredProject) {
         await this.appendToSession({ role: 'assistant', text: content });
+        await this.appendProjectHistory(mode, 'assistant', content);
       }
 
       webviewView.webview.postMessage({

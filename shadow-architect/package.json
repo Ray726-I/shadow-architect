@@ -15,7 +15,11 @@
     "onView:shadow-architect.chatView",
     "onCommand:shadow-architect.openChat",
     "onCommand:shadow-architect.initProject",
-    "onCommand:shadow-architect.helloWorld"
+    "onCommand:shadow-architect.listProjects",
+    "onCommand:shadow-architect.deleteProject",
+    "onCommand:shadow-architect.openProject",
+    "onCommand:shadow-architect.remember",
+    "onCommand:shadow-architect.recall"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -76,8 +80,24 @@
         "title": "Shadow Architect: Initialize Shadow Project"
       },
       {
-        "command": "shadow-architect.helloWorld",
-        "title": "Hello World"
+        "command": "shadow-architect.listProjects",
+        "title": "Shadow Architect: List Projects"
+      },
+      {
+        "command": "shadow-architect.deleteProject",
+        "title": "Shadow Architect: Delete Project"
+      },
+      {
+        "command": "shadow-architect.openProject",
+        "title": "Shadow Architect: Open Project"
+      },
+      {
+        "command": "shadow-architect.remember",
+        "title": "Shadow Architect: Remember Decision"
+      },
+      {
+        "command": "shadow-architect.recall",
+        "title": "Shadow Architect: Recall Context"
       }
     ]
   },
