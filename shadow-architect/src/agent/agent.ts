@@ -42,6 +42,10 @@ type AgentEventCallback = (event: AgentEvent) => void;
 export interface AgentRunInput {
   mode: AgentMode;
   userText: string;
+  history?: Array<{
+    role: 'user' | 'assistant';
+    text: string;
+  }>;
   onEvent?: AgentEventCallback;
 }
 
@@ -77,8 +81,11 @@ const ALL_TOOLS: ToolName[] = ['read_file', 'write_file', 'list_files', 'search_
 const CHAT_SYSTEM_PROMPT = [
   'You are Shadow Architect.',
   'Answer clearly and directly.',
+  'Use prior conversation messages to keep context and continuity.',
   'Do not invent file contents or command outputs.'
 ].join(' ');
+
+const CHAT_HISTORY_LIMIT = 20;
 
 const FIX_DIAGNOSE_SYSTEM_PROMPT = [
   'You are in FIX mode diagnosis phase.',
@@ -128,6 +135,15 @@ const FIX_DIAGNOSE_MAX_STEPS = 5;
 const FIX_EXECUTE_MAX_STEPS = 30;
 const BUILD_EXECUTE_MAX_STEPS = 50;
 
+function appendPromptSection(base: string, extra: string): string {
+  const trimmedExtra = extra.trim();
+  if (!trimmedExtra) {
+    return base;
+  }
+
+  return `${base}\n\n${trimmedExtra}`;
+}
+
 export class Agent {
   constructor(private readonly tools: ToolExecutor) {}
 
@@ -138,7 +154,7 @@ export class Agent {
     }
 
     if (input.mode === 'chat') {
-      return this.runChat(userText);
+      return this.runChat(userText, input.history ?? []);
     }
 
     if (input.mode === 'fix') {
@@ -148,15 +164,31 @@ export class Agent {
     return this.runBuild(userText, input.onEvent);
   }
 
-  private async runChat(userText: string): Promise<string> {
+  private async runChat(
+    userText: string,
+    history: Array<{ role: 'user' | 'assistant'; text: string }>
+  ): Promise<string> {
     const provider = createProvider();
+    const zeroTrustPrompt = await this.tools.buildZeroTrustPrompt();
+
+    const historyMessages: ChatMessage[] = history
+      .filter(item => item && typeof item.text === 'string' && item.text.trim().length > 0)
+      .slice(-CHAT_HISTORY_LIMIT)
+      .map(item => ({
+        role: item.role,
+        content: item.text
+      }));
+
     return provider.chat([
-      { role: 'system', content: CHAT_SYSTEM_PROMPT },
+      { role: 'system', content: appendPromptSection(CHAT_SYSTEM_PROMPT, zeroTrustPrompt) },
+      ...historyMessages,
       { role: 'user', content: userText }
     ]);
   }
 
   private async runFix(userText: string, onEvent?: AgentEventCallback): Promise<string> {
+    const zeroTrustPrompt = await this.tools.buildZeroTrustPrompt();
+
     this.emit(onEvent, {
       type: 'status',
       mode: 'fix',
@@ -168,7 +200,7 @@ export class Agent {
       mode: 'fix',
       phase: 'diagnose',
       userText,
-      systemPrompt: FIX_DIAGNOSE_SYSTEM_PROMPT,
+      systemPrompt: appendPromptSection(FIX_DIAGNOSE_SYSTEM_PROMPT, zeroTrustPrompt),
       access: 'read_only',
       maxSteps: FIX_DIAGNOSE_MAX_STEPS,
       iterationEventType: 'fix_iteration',
@@ -205,7 +237,7 @@ export class Agent {
       mode: 'fix',
       phase: 'execute',
       userText: executeInput,
-      systemPrompt: FIX_EXECUTE_SYSTEM_PROMPT,
+      systemPrompt: appendPromptSection(FIX_EXECUTE_SYSTEM_PROMPT, zeroTrustPrompt),
       access: 'full',
       maxSteps: FIX_EXECUTE_MAX_STEPS,
       iterationEventType: 'fix_iteration',
@@ -225,6 +257,8 @@ export class Agent {
   }
 
   private async runBuild(userText: string, onEvent?: AgentEventCallback): Promise<string> {
+    const zeroTrustPrompt = await this.tools.buildZeroTrustPrompt();
+
     const plan = await this.createBuildPlan(userText, onEvent);
     const planText = this.formatBuildPlan(plan);
 
@@ -252,7 +286,7 @@ export class Agent {
       mode: 'build',
       phase: 'execute',
       userText: executionInput,
-      systemPrompt: BUILD_EXECUTE_SYSTEM_PROMPT,
+      systemPrompt: appendPromptSection(BUILD_EXECUTE_SYSTEM_PROMPT, zeroTrustPrompt),
       access: 'full',
       maxSteps: BUILD_EXECUTE_MAX_STEPS,
       iterationEventType: 'build_iteration',

@@ -19,7 +19,10 @@
     "onCommand:shadow-architect.deleteProject",
     "onCommand:shadow-architect.openProject",
     "onCommand:shadow-architect.remember",
-    "onCommand:shadow-architect.recall"
+    "onCommand:shadow-architect.recall",
+    "onCommand:shadow-architect.storeSecret",
+    "onCommand:shadow-architect.listSecrets",
+    "onCommand:shadow-architect.deleteSecret"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -98,6 +101,18 @@
       {
         "command": "shadow-architect.recall",
         "title": "Shadow Architect: Recall Context"
+      },
+      {
+        "command": "shadow-architect.storeSecret",
+        "title": "Shadow Architect: Store Secret"
+      },
+      {
+        "command": "shadow-architect.listSecrets",
+        "title": "Shadow Architect: List Secret Names"
+      },
+      {
+        "command": "shadow-architect.deleteSecret",
+        "title": "Shadow Architect: Delete Secret"
       }
     ]
   },

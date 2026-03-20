@@ -5,7 +5,7 @@ import { ShadowWorkspace } from './workspace/workspace';
 export function activate(context: vscode.ExtensionContext) {
   const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
   const shadowWorkspace = new ShadowWorkspace(context.globalStorageUri.fsPath, workspacePath);
-  const provider = new ChatViewProvider(context.extensionUri, shadowWorkspace, workspacePath);
+  const provider = new ChatViewProvider(context.extensionUri, shadowWorkspace, context, workspacePath);
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
@@ -163,6 +163,84 @@ export function activate(context: vscode.ExtensionContext) {
 
       const prompt = await shadowWorkspace.buildContextPrompt();
       await vscode.window.showInformationMessage(prompt, { modal: true });
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('shadow-architect.storeSecret', async () => {
+      const name = await vscode.window.showInputBox({
+        prompt: 'Secret name (letters, numbers, _, -, .)',
+        ignoreFocusOut: true
+      });
+
+      if (!name || !name.trim()) {
+        return;
+      }
+
+      const value = await vscode.window.showInputBox({
+        prompt: `Secret value for ${name.trim()}`,
+        password: true,
+        ignoreFocusOut: true
+      });
+
+      if (value === undefined) {
+        return;
+      }
+
+      try {
+        await provider.storeSecret(name.trim(), value);
+        await vscode.window.showInformationMessage(`Stored secret: ${name.trim()}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to store secret';
+        await vscode.window.showErrorMessage(message);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('shadow-architect.listSecrets', async () => {
+      const names = await provider.listSecretNames();
+      if (names.length === 0) {
+        await vscode.window.showInformationMessage('No secrets stored for this project.');
+        return;
+      }
+
+      await vscode.window.showQuickPick(
+        names.map(name => ({ label: name })),
+        { placeHolder: 'Stored secret names (values are never shown)' }
+      );
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('shadow-architect.deleteSecret', async () => {
+      const names = await provider.listSecretNames();
+      if (names.length === 0) {
+        await vscode.window.showInformationMessage('No secrets to delete for this project.');
+        return;
+      }
+
+      const picked = await vscode.window.showQuickPick(
+        names.map(name => ({ label: name })),
+        { placeHolder: 'Select secret to delete' }
+      );
+
+      if (!picked) {
+        return;
+      }
+
+      const confirm = await vscode.window.showWarningMessage(
+        `Delete secret ${picked.label}?`,
+        { modal: true },
+        'Delete'
+      );
+
+      if (confirm !== 'Delete') {
+        return;
+      }
+
+      await provider.deleteSecret(picked.label);
+      await vscode.window.showInformationMessage(`Deleted secret: ${picked.label}`);
     })
   );
 

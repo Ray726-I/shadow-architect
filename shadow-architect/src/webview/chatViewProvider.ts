@@ -1,29 +1,80 @@
 import * as vscode from 'vscode';
 import { randomUUID } from 'node:crypto';
 import {
+  createProvider,
   defaultModelForProvider,
   getProviderConfig,
   listModels,
+  type ChatMessage,
   type ProviderName
 } from '../provider';
 import { Agent, type AgentMode, type AgentEvent } from '../agent/agent';
 import { ToolExecutor } from '../agent/tools';
 import { ShadowWorkspace, type ChatSession, type SessionMessage } from '../workspace/workspace';
+import { SecretManager } from '../secrets/secretManager';
+
+const MODE_SUGGESTION_TIMEOUT_SECONDS = 10;
+
+const MODE_CLASSIFIER_SYSTEM_PROMPT = [
+  'You are a classifier.',
+  'Choose exactly one mode for the user request: chat, fix, or build.',
+  'chat = questions, explanations, discussion, review.',
+  'fix = debugging, errors, failing tests, bug fixes.',
+  'build = new features, implementation, scaffolding.',
+  'Respond with only one lowercase word: chat, fix, or build.'
+].join(' ');
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'shadow-architect.chatView';
 
+  private readonly tools: ToolExecutor;
   private readonly agent: Agent;
+  private secretManager: SecretManager | null = null;
   private webviewView: vscode.WebviewView | null = null;
   private currentSession: ChatSession | null = null;
   private isRegisteredProject = false;
+  private pendingModeSuggestion: {
+    id: string;
+    text: string;
+    currentMode: AgentMode;
+    suggestedMode: AgentMode;
+  } | null = null;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly shadowWorkspace: ShadowWorkspace,
+    private readonly context: vscode.ExtensionContext,
     workspacePath: string
   ) {
-    this.agent = new Agent(new ToolExecutor(workspacePath));
+    this.tools = new ToolExecutor(workspacePath);
+    this.agent = new Agent(this.tools);
+    void this.ensureSecretManager();
+  }
+
+  async storeSecret(name: string, value: string): Promise<void> {
+    const manager = await this.ensureSecretManager();
+    await manager.store(name.trim(), value);
+  }
+
+  async listSecretNames(): Promise<string[]> {
+    const manager = await this.ensureSecretManager();
+    return manager.listNames();
+  }
+
+  async deleteSecret(name: string): Promise<void> {
+    const manager = await this.ensureSecretManager();
+    await manager.delete(name.trim());
+  }
+
+  private async ensureSecretManager(): Promise<SecretManager> {
+    if (this.secretManager) {
+      return this.secretManager;
+    }
+
+    const projectId = await this.shadowWorkspace.getProjectId();
+    this.secretManager = new SecretManager(this.context.secrets, projectId);
+    this.tools.setSecretManager(this.secretManager);
+    return this.secretManager;
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView) {
@@ -44,6 +95,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.onDidDispose(() => {
       configSubscription.dispose();
+      this.pendingModeSuggestion = null;
       this.webviewView = null;
     });
 
@@ -91,6 +143,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       if (message.type === 'setModel') {
         this.handleSetModel(webviewView, String(message.model ?? ''));
+        return;
+      }
+
+      if (message.type === 'modeSuggestionResponse') {
+        this.handleModeSuggestionResponse(
+          webviewView,
+          String(message.suggestionId ?? ''),
+          Boolean(message.accepted),
+          String(message.selectedMode ?? '')
+        );
       }
     });
   }
@@ -173,6 +235,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     return 'chat';
+  }
+
+  private parseModeLabel(mode: string): AgentMode | null {
+    if (mode === 'chat' || mode === 'fix' || mode === 'build') {
+      return mode;
+    }
+    return null;
   }
 
   private async handleReady(webviewView: vscode.WebviewView) {
@@ -454,6 +523,113 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (this.pendingModeSuggestion) {
+      webviewView.webview.postMessage({
+        type: 'addMessage',
+        role: 'assistant',
+        content: 'Please resolve the pending mode suggestion first.'
+      });
+      return;
+    }
+
+    const suggestedMode = await this.detectIntendedMode(text, mode);
+    if (suggestedMode && suggestedMode !== mode) {
+      const suggestionId = randomUUID();
+      this.pendingModeSuggestion = {
+        id: suggestionId,
+        text,
+        currentMode: mode,
+        suggestedMode
+      };
+
+      webviewView.webview.postMessage({
+        type: 'modeSuggestion',
+        suggestionId,
+        currentMode: mode,
+        suggestedMode,
+        seconds: MODE_SUGGESTION_TIMEOUT_SECONDS
+      });
+
+      return;
+    }
+
+    await this.runChatTurn(webviewView, text, mode);
+  }
+
+  private async handleModeSuggestionResponse(
+    webviewView: vscode.WebviewView,
+    suggestionId: string,
+    accepted: boolean,
+    selectedModeText: string
+  ) {
+    const pending = this.pendingModeSuggestion;
+    if (!pending) {
+      return;
+    }
+
+    const id = suggestionId.trim();
+    if (id && id !== pending.id) {
+      return;
+    }
+
+    this.pendingModeSuggestion = null;
+
+    webviewView.webview.postMessage({
+      type: 'modeSuggestionResolved',
+      suggestionId: pending.id
+    });
+
+    const selectedMode = this.parseModeLabel(selectedModeText);
+    const mode = selectedMode ?? (accepted ? pending.suggestedMode : pending.currentMode);
+    if (accepted) {
+      webviewView.webview.postMessage({
+        type: 'switchMode',
+        mode
+      });
+    }
+
+    await this.runChatTurn(webviewView, pending.text, mode);
+  }
+
+  private async detectIntendedMode(text: string, currentMode: AgentMode): Promise<AgentMode | null> {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    try {
+      const provider = createProvider();
+      const messages: ChatMessage[] = [
+        { role: 'system', content: MODE_CLASSIFIER_SYSTEM_PROMPT },
+        { role: 'user', content: trimmed }
+      ];
+
+      const response = (await provider.chat(messages)).trim().toLowerCase();
+      const match = response.match(/\b(chat|fix|build)\b/);
+      if (!match) {
+        return null;
+      }
+
+      const detected = this.parseModeLabel(match[1]);
+      if (!detected || detected === currentMode) {
+        return null;
+      }
+
+      return detected;
+    } catch {
+      return null;
+    }
+  }
+
+  private async runChatTurn(webviewView: vscode.WebviewView, text: string, mode: AgentMode) {
+    if (!text) {
+      return;
+    }
+
+    const history = mode === 'chat'
+      ? this.getSessionHistoryForPrompt(text)
+      : [];
+
     if (this.isRegisteredProject) {
       await this.appendToSession({ role: 'user', text });
       await this.appendProjectHistory(mode, 'user', text);
@@ -468,6 +644,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const reply = await this.agent.run({
         mode,
         userText: text,
+        history,
         onEvent: event => this.forwardAgentEvent(webviewView, event)
       });
 
@@ -501,6 +678,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         mode
       });
     }
+  }
+
+  private getSessionHistoryForPrompt(currentUserText: string): Array<{ role: 'user' | 'assistant'; text: string }> {
+    const session = this.currentSession;
+    if (!session) {
+      return [];
+    }
+
+    const messages = [...session.messages];
+    if (messages.length > 0) {
+      const last = messages[messages.length - 1];
+      if (last.role === 'user' && last.text.trim() === currentUserText.trim()) {
+        messages.pop();
+      }
+    }
+
+    return messages
+      .filter(item => (item.role === 'user' || item.role === 'assistant') && typeof item.text === 'string')
+      .slice(-20)
+      .map(item => ({ role: item.role, text: item.text }));
   }
 
   private forwardAgentEvent(webviewView: vscode.WebviewView, event: AgentEvent) {

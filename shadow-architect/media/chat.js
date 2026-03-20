@@ -18,6 +18,129 @@ let activeSessionId = '';
 let isRegisteredProject = false;
 let isHistoryOpen = false;
 let activeTimeline = null;
+let pendingModeSuggestion = null;
+
+const MODE_LABELS = {
+  chat: 'Chat',
+  fix: 'Fix',
+  build: 'Build'
+};
+
+function normalizeMode(mode) {
+  if (mode === 'fix' || mode === 'build') {
+    return mode;
+  }
+  return 'chat';
+}
+
+function setActiveMode(mode) {
+  currentMode = normalizeMode(mode);
+  for (const node of modeButtons) {
+    node.classList.toggle('active', node.dataset.mode === currentMode);
+  }
+}
+
+function clearModeSuggestion(options) {
+  const pending = pendingModeSuggestion;
+  if (!pending) {
+    return;
+  }
+
+  window.clearTimeout(pending.autoTimer);
+  window.clearInterval(pending.tickTimer);
+  pending.card.remove();
+
+  pendingModeSuggestion = null;
+
+  if (options && options.notify) {
+    vscode.postMessage({
+      type: 'modeSuggestionResponse',
+      suggestionId: pending.id,
+      accepted: Boolean(options.accepted),
+      selectedMode: normalizeMode(String(options.selectedMode || currentMode))
+    });
+  }
+}
+
+function showModeSuggestion(data) {
+  clearModeSuggestion();
+
+  const suggestionId = typeof data.suggestionId === 'string' ? data.suggestionId : '';
+  if (!suggestionId) {
+    return;
+  }
+
+  const suggestedMode = normalizeMode(String(data.suggestedMode || 'chat'));
+  const seconds = Number.isFinite(data.seconds)
+    ? Math.max(1, Math.floor(data.seconds))
+    : 10;
+
+  const card = document.createElement('div');
+  card.className = 'mode-suggestion-card';
+
+  const title = document.createElement('div');
+  title.className = 'mode-suggestion-title';
+  title.textContent = `Suggested mode: ${MODE_LABELS[suggestedMode]}`;
+
+  const hint = document.createElement('div');
+  hint.className = 'mode-suggestion-hint';
+
+  const countdown = document.createElement('div');
+  countdown.className = 'mode-suggestion-countdown';
+
+  const actions = document.createElement('div');
+  actions.className = 'mode-suggestion-actions';
+
+  const switchBtn = document.createElement('button');
+  switchBtn.type = 'button';
+  switchBtn.className = 'mode-suggestion-btn switch';
+  switchBtn.textContent = `Switch to ${MODE_LABELS[suggestedMode]}`;
+
+  const stayBtn = document.createElement('button');
+  stayBtn.type = 'button';
+  stayBtn.className = 'mode-suggestion-btn stay';
+  stayBtn.textContent = 'Stay in current mode';
+
+  actions.appendChild(switchBtn);
+  actions.appendChild(stayBtn);
+
+  card.appendChild(title);
+  card.appendChild(hint);
+  card.appendChild(countdown);
+  card.appendChild(actions);
+  document.body.appendChild(card);
+
+  const deadline = Date.now() + (seconds * 1000);
+
+  const updateCountdown = () => {
+    const remainingMs = Math.max(0, deadline - Date.now());
+    const remainingSeconds = Math.ceil(remainingMs / 1000);
+    hint.textContent = 'Auto-switch will apply unless you cancel.';
+    countdown.textContent = `Auto-switching in ${remainingSeconds}s`;
+  };
+
+  pendingModeSuggestion = {
+    id: suggestionId,
+    suggestedMode,
+    card,
+    autoTimer: window.setTimeout(() => {
+      setActiveMode(suggestedMode);
+      clearModeSuggestion({ notify: true, accepted: true, selectedMode: suggestedMode });
+    }, seconds * 1000),
+    tickTimer: window.setInterval(updateCountdown, 250)
+  };
+
+  switchBtn.addEventListener('click', () => {
+    setActiveMode(suggestedMode);
+    clearModeSuggestion({ notify: true, accepted: true, selectedMode: suggestedMode });
+  });
+
+  stayBtn.addEventListener('click', () => {
+    clearModeSuggestion({ notify: true, accepted: false, selectedMode: currentMode });
+  });
+
+  updateCountdown();
+}
 
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -352,6 +475,10 @@ function renderHistoryList(sessions) {
 }
 
 send.onclick = () => {
+  if (pendingModeSuggestion) {
+    return;
+  }
+
   const text = input.value.trim();
   if (!text) {
     return;
@@ -364,9 +491,11 @@ send.onclick = () => {
 
 for (const button of modeButtons) {
   button.addEventListener('click', () => {
-    currentMode = button.dataset.mode || 'chat';
-    for (const node of modeButtons) {
-      node.classList.toggle('active', node === button);
+    setActiveMode(button.dataset.mode || 'chat');
+
+    if (pendingModeSuggestion) {
+      const accepted = currentMode === pendingModeSuggestion.suggestedMode;
+      clearModeSuggestion({ notify: true, accepted, selectedMode: currentMode });
     }
   });
 }
@@ -456,6 +585,7 @@ window.addEventListener('message', event => {
   }
 
   if (msg.type === 'chatStart') {
+    clearModeSuggestion();
     setTyping(true);
     activeTimeline = null;
     return;
@@ -472,6 +602,23 @@ window.addEventListener('message', event => {
     return;
   }
 
+  if (msg.type === 'modeSuggestion') {
+    showModeSuggestion(msg);
+    return;
+  }
+
+  if (msg.type === 'switchMode') {
+    setActiveMode(String(msg.mode || 'chat'));
+    return;
+  }
+
+  if (msg.type === 'modeSuggestionResolved') {
+    if (pendingModeSuggestion && msg.suggestionId === pendingModeSuggestion.id) {
+      clearModeSuggestion();
+    }
+    return;
+  }
+
   if (msg.type === 'projectStatus') {
     isRegisteredProject = Boolean(msg.isRegistered);
     historyToggle.disabled = !isRegisteredProject;
@@ -484,3 +631,4 @@ window.addEventListener('message', event => {
 
 vscode.postMessage({ type: 'getProviderConfig' });
 vscode.postMessage({ type: 'ready' });
+setActiveMode(currentMode);

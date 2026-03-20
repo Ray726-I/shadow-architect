@@ -203,6 +203,63 @@ body {
   border-color: var(--vscode-button-background);
 }
 
+.mode-suggestion-card {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 74px;
+  z-index: 30;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 8px;
+  background: var(--vscode-editorWidget-background);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mode-suggestion-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--vscode-foreground);
+}
+
+.mode-suggestion-hint,
+.mode-suggestion-countdown {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.mode-suggestion-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.mode-suggestion-btn {
+  border: 1px solid var(--vscode-input-border);
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mode-suggestion-btn.switch {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-button-background);
+}
+
+.mode-suggestion-btn.switch:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.mode-suggestion-btn.stay:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
 #messages {
   flex: 1;
   overflow-y: auto;
